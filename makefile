@@ -1,9 +1,9 @@
 CXX = g++
-CXXFLAGS = -std=c++11 -Wall -Wextra -pedantic -pthread
+CXXFLAGS = -std=c++14 -Wall -Wextra -pedantic -pthread
 
-SRCS = test.cpp threadpool.cpp
+SRCS = main.cpp threadpool.cpp http_conn.cpp
 OBJS = $(SRCS:.cpp=.o)
-TARGET = threadpool_test
+TARGET = http_server
 
 all: $(TARGET)
 

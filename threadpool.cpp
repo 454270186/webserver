@@ -12,6 +12,7 @@ Threadpool::Threadpool(int thread_number, int max_requests)
     }
 
     for (int i = 0; i < m_thread_number; i++) {
+        printf("create %d thread\n", i);
         m_threads.emplace_back(&Threadpool::worker, this);
         m_threads[i].detach();
     }
