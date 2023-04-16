@@ -57,7 +57,6 @@ int main(int argc, char** argv) {
     }
 
     // store client connection
-    //vector<HttpConn> users;
     unordered_map<int, HttpConn> users;
 
     // socket
@@ -107,13 +106,11 @@ int main(int argc, char** argv) {
                     continue;
                 }
 
-                //users.push_back(HttpConn(conn_fd, client_addr))；
                 users.insert(std::make_pair(conn_fd, HttpConn(conn_fd, client_addr)));
             } else if (ep_events[i].events & (EPOLLRDHUP | EPOLLHUP | EPOLLERR)) {
                 users[sockfd].close_conn();
             } else if (ep_events[i].events & EPOLLIN) {
                 //mod_fd(HttpConn::m_epoll_fd, sockfd, EPOLLIN); // change to lt
-                printf("我来也\n");
                 if (users[sockfd].read()) {
                     function<void()> task = [&](){ users[sockfd].process(); };
                     pool->append(task);
