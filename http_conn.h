@@ -3,8 +3,10 @@
 #include <sys/epoll.h>
 #include <arpa/inet.h>
 #include <string>
+#include <unordered_map>
 
 using std::string;
+using std::unordered_map;
 
 class HttpConn {
 public:
@@ -56,7 +58,6 @@ public:
     
     void close_conn();
 
-
 private:
     void init();
 
@@ -65,21 +66,37 @@ private:
     int m_start_line{0};
     CHECK_MAIN_STATE m_check_state; // the state of main state machine
 
+    // request line
     string m_url{};
     string m_version{};
     METHOD m_method;
+    // header
     string m_host;
     bool m_keep_alive{false};
+    unordered_map<string, string> m_header_map;
 
+    // parse http request
     HTTP_CODE process_read_request();
     HTTP_CODE parse_request_line(char* text);
     HTTP_CODE parse_header(char* text);
     HTTP_CODE parse_content(char* text);
-
     LINE_STATUS parse_line();
     inline char* get_line() { return m_read_buf + m_start_line; }
 
     HTTP_CODE do_request();
+
+    // generate http response
+    int m_write_index;
+    int bytes_to_send;
+    int bytes_have_sent;
+    bool process_write_response(HTTP_CODE read_ret);
+    void add_default_res_header();
+
+    // static file
+    char* m_file_address;
+    struct stat m_file_stat;
+    struct iovec m_iv[2];             
+    int m_iv_count;
 
 private:
     int m_sock_fd; // socket fd for this http connect
@@ -89,6 +106,7 @@ private:
     int m_read_index{0};
 
     char m_write_buf[WRITE_BUFFER_SIZE];
+
 };
 
 #endif
