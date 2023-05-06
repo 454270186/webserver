@@ -90,13 +90,15 @@ private:
     int bytes_to_send;
     int bytes_have_sent;
     bool process_write_response(HTTP_CODE read_ret);
-    void add_default_res_header();
+    void add_default_res();
+    void add_status_line(int code, const char* title);
 
     // static file
     char* m_file_address;
     struct stat m_file_stat;
     struct iovec m_iv[2];             
     int m_iv_count;
+    void unmap();
 
 private:
     int m_sock_fd; // socket fd for this http connect

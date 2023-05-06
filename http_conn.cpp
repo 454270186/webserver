@@ -9,6 +9,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <cstring>
 #include "http_conn.h"
 
@@ -63,6 +64,7 @@ HttpConn::HttpConn(int conn_fd, sockaddr_in& client_addr) : m_sock_fd(conn_fd), 
     // add to epoll
     add_fd(m_epoll_fd, m_sock_fd, true);
     m_user_cnt++;
+    printf("current user: %d\n", m_user_cnt);
 
     init();
 }
@@ -78,11 +80,13 @@ void HttpConn::init() {
     m_url = {};
     m_version = {};
     m_host = {};
+    //m_header_map.clear();
 
     m_keep_alive = false;
 
     // clear buffer
     bzero(m_read_buf, READ_BUFFER_SIZE);
+    //bzero(m_write_buf, WRITE_BUFFER_SIZE);
 
 }
 
@@ -91,6 +95,7 @@ void HttpConn::close_conn() {
         remove_fd(m_epoll_fd, m_sock_fd);
         m_sock_fd = -1;
         m_user_cnt--;
+        printf("a user close connect\n");
     }
 }
 
@@ -123,8 +128,51 @@ bool HttpConn::read() {
 }
 
 bool HttpConn::write() {
-    printf("一次性写完\n");
-    return true;
+    if (bytes_to_send == 0) {
+        mod_fd(m_epoll_fd, m_sock_fd, EPOLLIN|EPOLLONESHOT|EPOLLET);
+        init();
+        return true;
+    }
+
+    int cnt = 0;
+    while (true) {
+        cnt = writev(m_sock_fd, m_iv, m_iv_count);
+        if (cnt <= -1) {
+            if((errno==EAGAIN)||(errno==EINTR)){
+                    mod_fd(m_epoll_fd, m_sock_fd, EPOLLOUT|EPOLLONESHOT|EPOLLET);
+                    return true;
+                }
+                unmap();
+                return false;
+        }
+
+        bytes_have_sent += cnt;
+        bytes_to_send -= cnt;
+
+        if (bytes_have_sent >= m_iv[0].iov_len) {
+            m_iv[0].iov_len = 0;
+            m_iv[1].iov_base = m_file_address+(bytes_have_sent - m_write_index);
+            m_iv[1].iov_len = bytes_to_send;
+        } else {
+            m_iv[0].iov_base = m_write_buf + bytes_have_sent;
+            m_iv[0].iov_len = m_iv[0].iov_len - cnt;
+        }
+
+        if (bytes_to_send <= 0) {
+            unmap();
+            mod_fd(m_epoll_fd, m_sock_fd, EPOLLIN|EPOLLET|EPOLLONESHOT);
+
+            if (m_header_map.find("Connection") != m_header_map.end()) {
+                // if (m_header_map["Connection"] == "keep-alive") {
+                //     init();
+                //     return true;
+                // }
+                return false;
+            } else {
+                return false;
+            }
+        }
+    }
 }
 
 /// @brief the entry of main state machine
@@ -134,13 +182,13 @@ HttpConn::HTTP_CODE HttpConn::process_read_request() {
     HTTP_CODE ret = NO_REQUEST;
 
     char* text = 0;
-    printf("sbsbsbs\n");
+    //printf("sbsbsbs\n");
     while ((m_check_state == CHECK_STATE_CONTENT && line_stat == LINE_OK)
             || (line_stat = parse_line()) == LINE_OK) {
-                printf("readreadread\n");
+                //printf("readreadread\n");
                 text = get_line();
                 m_start_line = m_check_index;
-                printf("get 1 http line: %s\n", text);
+                //printf("get 1 http line: %s\n", text);
 
                 switch (m_check_state) {
                     case CHECK_STATE_REQUESTLINE:
@@ -246,22 +294,23 @@ HttpConn::HTTP_CODE HttpConn::parse_request_line(char* text) {
 }
 
 HttpConn::HTTP_CODE HttpConn::parse_header(char* text) {
-    printf("the text is %s\n", text);
+    //printf("the text is %s\n", text);
     string header(text);
     string key, value;
-    std::cout << "head is: " << header << std::endl;
-    std::cout << "head size: " << header.length() << std::endl;
+    //std::cout << "head is: " << header << std::endl;
+    //std::cout << "head size: " << header.length() << std::endl;
     if (header.size() == 0) {
-        printf("end header\n");
+        //printf("end header\n");
         if (m_header_map.find("Content-Length") == m_header_map.end()) {
             // indicates that there is a request body
-            printf("no content\n");
+            //printf("no content\n");
             m_check_state = CHECK_STATE_CONTENT;
-            return NO_REQUEST;
+            //return NO_REQUEST;
+            return GET_REQUEST;
         }
 
         // if no request body, get a complete request
-        printf("have content\n");
+        //printf("have content\n");
         return GET_REQUEST;
     }
 
@@ -269,10 +318,10 @@ HttpConn::HTTP_CODE HttpConn::parse_header(char* text) {
     if (pos != string::npos) {
         header.replace(pos, 1, " ");
     }
-    std::cout << header << std::endl;
+    //std::cout << header << std::endl;
     istringstream header_stream(header);
     header_stream >> key >> value;
-    std::cout << key << value << std::endl;
+    //std::cout << key << value << std::endl;
     if (key.empty() || value.empty()) {
         printf("empty\n");
         return BAD_REQUEST;
@@ -281,9 +330,9 @@ HttpConn::HTTP_CODE HttpConn::parse_header(char* text) {
     if (m_header_map.find(key) != m_header_map.end()) {
         return BAD_REQUEST;
     }
-    printf("hh\n");
+    //printf("hh\n");
     m_header_map.insert(std::make_pair(key, value));
-    printf("yy\n");
+    //printf("yy\n");
     return NO_REQUEST;
 }
 
@@ -316,7 +365,9 @@ HttpConn::HTTP_CODE HttpConn::do_request() {
 bool HttpConn::process_write_response(HTTP_CODE read_ret) {
     switch (read_ret) {
         case FILE_REQUEST:
-            add_default_res_header();
+            //printf("here for index html\n");
+            add_default_res();
+            //printf("after here for index html\n");
             m_iv[0].iov_base = m_write_buf;
             m_iv[0].iov_len = m_write_index;
             m_iv[1].iov_base = m_file_address;
@@ -329,8 +380,30 @@ bool HttpConn::process_write_response(HTTP_CODE read_ret) {
     }
 }
 
-void HttpConn::add_default_res_header() {
-    
+void HttpConn::add_default_res() {
+    int len = 0;
+    len += snprintf(m_write_buf + m_write_index, WRITE_BUFFER_SIZE - m_write_index,
+                    "HTTP/1.1 200 OK\r\n");
+    len += snprintf(m_write_buf + m_write_index + len, WRITE_BUFFER_SIZE - m_write_index - len,
+                    "Content-Length: %ld\r\n", m_file_stat.st_size);
+
+    if (m_url == "/Forever.jpg") {
+        len += snprintf(m_write_buf + m_write_index + len, WRITE_BUFFER_SIZE - m_write_index - len,
+                    "Content-Type: image/jpg\r\n");
+    } else {
+        len += snprintf(m_write_buf + m_write_index + len, WRITE_BUFFER_SIZE - m_write_index - len,
+                    "Content-Type: text/html\r\n");
+    }
+    // len += snprintf(m_write_buf + m_write_index + len, WRITE_BUFFER_SIZE - m_write_index - len,
+    //                 "Connection: Keep-alive");
+    len += snprintf(m_write_buf + m_write_index + len, WRITE_BUFFER_SIZE - m_write_index - len,
+                    "\r\n");
+    m_write_index += len;
+    printf("write buffer: %s\n", m_write_buf);
+}
+
+void HttpConn::add_status_line(int code, const char* title) {
+
 }
 
 // called by workthread
@@ -347,6 +420,14 @@ void HttpConn::process() {
     if (!write_ret) {
         close_conn();
     }
-    
+    mod_fd(m_epoll_fd, m_sock_fd, EPOLLOUT|EPOLLONESHOT|EPOLLET);
     printf("create response\n");
+}
+
+// clear memory mapping
+void HttpConn::unmap() {
+    if (m_file_address) {
+        munmap(m_file_address, m_file_stat.st_size);
+        m_file_address = 0;
+    }
 }
